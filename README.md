@@ -1,68 +1,125 @@
-# AI code review bot - local webhook server
+# Local Server
 
-Day 2 setup for a FastAPI pipeline that handles GitHub webhooks. It checks signatures, pulls PR diffs, and cleans up the output.
+Minimal FastAPI server with:
 
-## Project structure
-- `main.py`: app setup and routing
-- `routes/webhook.py`: the main webhook logic
-- `services/github.py`: signature checks and fetching diffs
-- `models/events.py`: data models for PR events
-- `utils/diff.py`: diff cleanup logic
-- `.env`: secrets and tokens
+- `GET /health` (health check)
+- `POST /webhook` (GitHub webhook receiver, intended for `pull_request` events)
 
 ## Prereqs
-- Python venv at `./.venv`
-- Installed: `fastapi`, `uvicorn`, `httpx`, `python-dotenv`
 
-If you're missing anything, run:
-```powershell
-./.venv/Scripts/python.exe -m pip install httpx python-dotenv
-```
+- A working virtualenv at `./.venv`
+- Packages installed in the venv: `fastapi`, `uvicorn`
 
-## Environment variables
-Put these in a `.env` file in the root:
-```env
-WEBHOOK_SECRET=your_secret
-GITHUB_TOKEN=your_token
-```
-`WEBHOOK_SECRET` must match your GitHub settings. `GITHUB_TOKEN` lets the app download the diffs.
+## Run Locally
 
-## Run it
+PowerShell:
+
 ```powershell
 ./run.ps1
 ```
-Or manually:
+
+Or directly:
+
 ```powershell
 ./.venv/Scripts/python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
+Open:
+
+- `http://127.0.0.1:8000/health`
+- `http://127.0.0.1:8000/docs`
+
 ## Endpoints
-- `GET /health`: simple status check
-- `POST /webhook`: handles incoming PR events
 
-## GitHub webhook setup (ngrok)
-Since your server is local, you need ngrok to expose it.
+- `GET http://127.0.0.1:8000/health` -> `{ "status": "ok" }`
+- `POST http://127.0.0.1:8000/webhook` -> `{ "ok": true }`
 
-1. Start the server (`./run.ps1`)
-2. Start ngrok: `ngrok http 8000`
-3. Copy the URL (like `https://xxxx.ngrok-free.dev`)
-4. In GitHub (Repo -> Settings -> Webhooks):
-   - **Payload URL**: your-ngrok-url/webhook
-   - **Content type**: application/json
-   - **Secret**: same as your `.env`
-   - **Events**: Pull requests only
+## GitHub Webhook Setup (Using ngrok)
 
-## How the webhook works
-The `POST /webhook` route follows these steps:
-1. Reads the raw body to check the signature.
-2. Logs the incoming request.
-3. Checks the signature against your secret.
-4. Ignores any action that isn't `opened` or `synchronize`.
-5. Downloads the PR diff from GitHub.
-6. Cleans up the diff (removes git metadata) and logs it.
+GitHub can’t call `http://127.0.0.1:8000` directly. Use ngrok to temporarily expose your local server.
 
-## Common issues
-- **400 Invalid signature**: your secrets don't match.
-- **500 errors**: check your `.env` file.
-- **502 errors**: usually a bad GitHub token or URL.
-- **ngrok 404**: check your Payload URL path (it must end in `/webhook`).
+### 1) Start the server
+
+Optional (recommended): if you set a webhook secret in GitHub, set the same secret locally before starting the server.
+
+```powershell
+$env:GITHUB_WEBHOOK_SECRET = "your-secret"
+./run.ps1
+```
+
+If you did not set a secret in GitHub, do not set `GITHUB_WEBHOOK_SECRET`.
+
+### 2) Start ngrok
+
+In a separate terminal:
+
+```powershell
+ngrok http 8000
+```
+
+Copy the forwarding URL that looks like:
+
+- `https://<something>.ngrok-free.dev`
+
+### 3) Create a test GitHub repo
+
+On GitHub: create a new repository (any name).
+
+If the repo is empty, create an initial commit (for example add a `README.md`).
+
+### 4) Add the webhook
+
+Repo -> Settings -> Webhooks -> Add webhook:
+
+- Payload URL: `https://<your-ngrok-domain>/webhook`
+- Content type: `application/json`
+- Secret: set one (recommended). If you do, it must match `GITHUB_WEBHOOK_SECRET` locally.
+- Events: Let me select individual events -> check **Pull requests** only
+- Active: checked
+
+### 5) Trigger a pull request event
+
+You need at least two branches with different commits.
+
+From your repo folder:
+
+```powershell
+git checkout -b test-pr
+"test" | Out-File -Encoding ascii test.txt
+git add test.txt
+git commit -m "Test PR"
+git push -u origin test-pr
+```
+
+Then on GitHub:
+
+- Pull requests -> New pull request -> base: `main`, compare: `test-pr` -> Create pull request
+
+### 6) Verify delivery
+
+- In GitHub: Settings -> Webhooks -> (your webhook) -> Recent Deliveries
+  - Expect HTTP `200`
+- In your server terminal: expect a log line like:
+  - `github_webhook event='pull_request' action='opened' repo='owner/repo' pr_number=... pr_title=...`
+
+## How `main.py` Works
+
+- Creates a FastAPI app: `app = FastAPI(...)`
+- `GET /health` returns a simple JSON body used for basic liveness checks.
+
+### Webhook signature verification
+
+- GitHub signs webhook payloads with `X-Hub-Signature-256` when you configure a webhook **secret**.
+- If `GITHUB_WEBHOOK_SECRET` is set in your environment, the server will:
+  1. Read the raw request bytes (`await request.body()`) because signatures must be computed on the raw body.
+  2. Compute `HMAC-SHA256(secret, body)`.
+  3. Compare it to the incoming `X-Hub-Signature-256` header using `hmac.compare_digest`.
+  4. Reject with `401` if the header is missing/invalid.
+
+### `POST /webhook`
+
+- Reads and optionally verifies the signature.
+- Parses JSON (`await request.json()`).
+- Extracts a few fields (`action`, `repository.full_name`, `pull_request.number`, `pull_request.title`).
+- Prints a compact summary to stdout.
+- Returns `{ "ok": true }` quickly so GitHub doesn’t time out.

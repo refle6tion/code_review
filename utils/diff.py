@@ -4,9 +4,7 @@ def clean_diff(raw_diff: str) -> str:
     for line in raw_diff.splitlines():
         if line.startswith("index "):
             continue
-        if line.startswith("diff --git"):
-            continue
-        if line.startswith(("+++", "---", "@@", "+", "-", " ")):
+        if line.startswith(("+++", "---", "@@", "+", "-", "diff --git", " ")):
             cleaned_lines.append(line)
 
     return "\n".join(cleaned_lines)

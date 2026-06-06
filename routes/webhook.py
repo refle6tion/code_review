@@ -6,7 +6,8 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from models.events import PREvent
-from services.github import fetch_pr_diff, validate_signature
+from services.github import fetch_pr_diff, post_review_comment, validate_signature
+from services.llm import get_code_review
 from utils.diff import clean_diff
 
 load_dotenv()
@@ -79,6 +80,24 @@ async def webhook_handler(
     _log("diff_fetched", chars=len(raw_diff), pr=pr_event.pr_number)
 
     cleaned_diff = clean_diff(raw_diff)
+
+    # Day 3: log review input size before generating the review.
+    _log("review_requested", pr=pr_event.pr_number, diff_chars=len(cleaned_diff))
+
+    # Day 3: log the empty-diff short-circuit reason before the LLM helper returns its fallback string.
+    if not cleaned_diff.strip():
+        _log("review_skipped", pr=pr_event.pr_number, reason="empty_cleaned_diff")
+
+    # Day 3: generate and post the PR review.
+    review_text = get_code_review(cleaned_diff, pr_event.title, pr_event.body)
+    _log("review_generated", pr=pr_event.pr_number, review_chars=len(review_text))
+    
+    try:
+        await post_review_comment(pr_event.repo, pr_event.pr_number, review_text, github_token)
+    except ValueError as exc:
+        _log("error", reason="review_post_failed", error=str(exc), pr=pr_event.pr_number)
+        raise HTTPException(status_code=502, detail=str(exc))
+
     logger.info(cleaned_diff)
 
     return {"status": "ok", "pr": pr_event.pr_number}

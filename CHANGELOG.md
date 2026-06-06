@@ -1,3 +1,20 @@
+## [2026-06-04] — Add Gemini-based PR review generation
+
+**What changed:**
+- Added `services/llm.py::get_code_review` to generate structured PR reviews with the `google-generativeai` SDK and `gemini-2.0-flash`.
+- Updated `routes/webhook.py` to send cleaned diffs to Gemini, log review generation details, and post the returned review back to the PR.
+- Added `services/github.py::post_review_comment` to publish review output as a GitHub pull request comment.
+
+**Functionality impact:**
+Webhook processing now continues past diff cleaning into AI review generation and posts the resulting review text back onto the pull request. Empty cleaned diffs still avoid an unnecessary model call and return a fallback review message.
+
+**How to run / test:**
+```powershell
+./.venv/Scripts/python.exe -m pip install google-generativeai
+./.venv/Scripts/python.exe -m py_compile main.py routes/webhook.py services/github.py services/llm.py models/events.py utils/diff.py
+./run.ps1
+```
+
 ## [2026-06-03] — Enable redirect following for diff fetching
 
 **What changed:**
