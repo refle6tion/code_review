@@ -3,7 +3,7 @@ import logging
 import os
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from models.events import PREvent
 from services.github import fetch_pr_diff, post_review_comment, validate_signature
@@ -35,9 +35,31 @@ def parse_pr_event(payload: dict) -> PREvent:
     )
 
 
+async def run_review(pr_event: PREvent, github_token: str) -> None:
+    """Background task: fetch diff, run LLM review, post comment."""
+    try:
+        raw_diff = await fetch_pr_diff(diff_url=pr_event.diff_url, github_token=github_token)
+        _log("diff_fetched", chars=len(raw_diff), pr=pr_event.pr_number)
+
+        cleaned_diff = clean_diff(raw_diff)
+        _log("review_requested", pr=pr_event.pr_number, diff_chars=len(cleaned_diff))
+
+        if not cleaned_diff.strip():
+            _log("review_skipped", pr=pr_event.pr_number, reason="empty_cleaned_diff")
+            return
+
+        review_text = get_code_review(cleaned_diff, pr_event.title, pr_event.body)
+        _log("review_generated", pr=pr_event.pr_number, review_chars=len(review_text))
+
+        await post_review_comment(pr_event.repo, pr_event.pr_number, review_text, github_token)
+    except Exception as exc:
+        _log("error", reason="review_background_failed", error=str(exc), pr=pr_event.pr_number)
+
+
 @router.post("/webhook")
 async def webhook_handler(
     request: Request,
+    background_tasks: BackgroundTasks,
     x_hub_signature_256: str = Header(default="", alias="X-Hub-Signature-256"),
 ) -> dict:
     raw_body = await request.body()
@@ -71,33 +93,6 @@ async def webhook_handler(
         _log("error", reason="payload_parse_failed", error=str(exc))
         raise HTTPException(status_code=400, detail="Invalid pull request payload")
 
-    try:
-        raw_diff = await fetch_pr_diff(diff_url=pr_event.diff_url, github_token=github_token)
-    except ValueError as exc:
-        _log("error", reason="diff_fetch_failed", error=str(exc), diff_url=pr_event.diff_url)
-        raise HTTPException(status_code=502, detail=str(exc))
-
-    _log("diff_fetched", chars=len(raw_diff), pr=pr_event.pr_number)
-
-    cleaned_diff = clean_diff(raw_diff)
-
-    # Day 3: log review input size before generating the review.
-    _log("review_requested", pr=pr_event.pr_number, diff_chars=len(cleaned_diff))
-
-    # Day 3: log the empty-diff short-circuit reason before the LLM helper returns its fallback string.
-    if not cleaned_diff.strip():
-        _log("review_skipped", pr=pr_event.pr_number, reason="empty_cleaned_diff")
-
-    # Day 3: generate and post the PR review.
-    review_text = get_code_review(cleaned_diff, pr_event.title, pr_event.body)
-    _log("review_generated", pr=pr_event.pr_number, review_chars=len(review_text))
-    
-    try:
-        await post_review_comment(pr_event.repo, pr_event.pr_number, review_text, github_token)
-    except ValueError as exc:
-        _log("error", reason="review_post_failed", error=str(exc), pr=pr_event.pr_number)
-        raise HTTPException(status_code=502, detail=str(exc))
-
-    logger.info(cleaned_diff)
-
+    background_tasks.add_task(run_review, pr_event, github_token)
+    _log("review_dispatched", pr=pr_event.pr_number)
     return {"status": "ok", "pr": pr_event.pr_number}

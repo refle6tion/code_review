@@ -1,3 +1,38 @@
+## [2026-06-07] — Fix webhook timeout by moving review to background task
+
+**What changed:**
+- Moved slow processing (diff fetch, LLM call, comment post) from the request handler into a `BackgroundTask` function `routes/webhook.py::run_review`.
+- Added `BackgroundTasks` parameter to `webhook_handler` so the function returns `200 OK` immediately after validation, before the review pipeline runs.
+- Errors in the background task are now logged instead of raising `HTTPException` (since the response has already been sent).
+
+**Functionality impact:**
+GitHub webhooks were timing out (~30s) because the handler waited for the LLM and GitHub API calls before responding. Now the handler acknowledges the event within milliseconds, while the review pipeline runs asynchronously behind the scenes and still posts the comment to the PR.
+
+**How to run / test:**
+```powershell
+./.venv/Scripts/python.exe -m py_compile main.py routes/webhook.py services/github.py services/llm.py models/events.py utils/diff.py
+./run.ps1
+# Push a commit or open a PR — the webhook should return 200 instantly,
+# and the review comment will appear on the PR after a few seconds.
+```
+
+## [2026-06-07] — Fix truncated Gemini reviews caused by thinking tokens
+
+**What changed:**
+- Updated `services/llm.py::get_code_review` to disable Gemini 2.5 Flash thinking (`thinking_config=types.ThinkingConfig(thinking_budget=0)`) and raise `max_output_tokens` from 1024 to 8192.
+- Added finish-reason logging in `services/llm.py` so future `MAX_TOKENS` truncations are visible in the server log.
+
+**Functionality impact:**
+Gemini 2.5 Flash's default "thinking" mode was consuming the entire `max_output_tokens=1024` budget, causing reviews to be cut off after roughly the first issue (e.g. only "1. Hardcoded Credentials..." was posted). Disabling thinking frees the full token budget for the actual review text, and bumping the cap gives the model headroom for long diffs. The full numbered list of issues will now reach the PR comment.
+
+**How to run / test:**
+```powershell
+./.venv/Scripts/python.exe -m py_compile main.py routes/webhook.py services/github.py services/llm.py models/events.py utils/diff.py
+./run.ps1
+# Push a new commit to the test PR; the review comment should now include all numbered issues,
+# and the log should show "llm_finish_reason=FinishReason.STOP" (not MAX_TOKENS).
+```
+
 ## [2026-06-04] — Add Gemini-based PR review generation
 
 **What changed:**
