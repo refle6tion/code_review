@@ -77,7 +77,7 @@ def get_code_review(diff: str, pr_title: str, pr_body: str) -> str:
     )
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
