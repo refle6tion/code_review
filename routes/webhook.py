@@ -6,9 +6,10 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from models.events import PREvent
-from services.github import fetch_pr_diff, post_review_comment, validate_signature
+from services.github import fetch_file_content, fetch_pr_diff, post_review_comment, validate_signature
 from services.llm import get_code_review
-from utils.diff import clean_diff
+from services.tree_sitter import extract_python_context, format_ast_context_for_prompt
+from utils.diff import format_diff_for_prompt, parse_diff
 
 load_dotenv()
 
@@ -41,14 +42,50 @@ async def run_review(pr_event: PREvent, github_token: str) -> None:
         raw_diff = await fetch_pr_diff(diff_url=pr_event.diff_url, github_token=github_token)
         _log("diff_fetched", chars=len(raw_diff), pr=pr_event.pr_number)
 
-        cleaned_diff = clean_diff(raw_diff)
-        _log("review_requested", pr=pr_event.pr_number, diff_chars=len(cleaned_diff))
+        changed_files = parse_diff(raw_diff)
+        formatted_diff = format_diff_for_prompt(changed_files)
+        ast_symbols = []
 
-        if not cleaned_diff.strip():
+        for changed_file in changed_files:
+            if changed_file.status == "deleted" or not (changed_file.new_path or "").endswith(".py"):
+                continue
+
+            try:
+                source = await fetch_file_content(
+                    repo=pr_event.repo,
+                    file_path=changed_file.new_path or "",
+                    ref=pr_event.sha,
+                    github_token=github_token,
+                )
+                if source is None:
+                    continue
+                ast_symbols.extend(extract_python_context(changed_file, source))
+            except Exception as exc:
+                _log(
+                    "ast_context_failed",
+                    pr=pr_event.pr_number,
+                    file=changed_file.new_path,
+                    error=str(exc),
+                )
+
+        ast_context = format_ast_context_for_prompt(ast_symbols)
+        review_input = formatted_diff
+        if ast_context:
+            review_input = f"{formatted_diff}\n\n{ast_context}"
+
+        _log(
+            "review_requested",
+            pr=pr_event.pr_number,
+            files=len(changed_files),
+            ast_symbols=len(ast_symbols),
+            diff_chars=len(review_input),
+        )
+
+        if not review_input.strip():
             _log("review_skipped", pr=pr_event.pr_number, reason="empty_cleaned_diff")
             return
 
-        review_text = get_code_review(cleaned_diff, pr_event.title, pr_event.body)
+        review_text = get_code_review(review_input, pr_event.title, pr_event.body)
         _log("review_generated", pr=pr_event.pr_number, review_chars=len(review_text))
 
         await post_review_comment(pr_event.repo, pr_event.pr_number, review_text, github_token)

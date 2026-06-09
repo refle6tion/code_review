@@ -1,0 +1,6 @@
+fastapi
+google-genai
+httpx
+python-dotenv
+tree-sitter-language-pack
+uvicorn

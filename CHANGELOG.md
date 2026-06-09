@@ -1,3 +1,37 @@
+## [2026-06-10] — Add local parsed diff inspection workflow
+
+**What changed:**
+- Documented a local debugging workflow for inspecting `utils.diff::parse_diff` output from `git diff`.
+- Included the optional Python AST context path using `services.tree_sitter::extract_python_context` for local `.py` changes.
+
+**Functionality impact:**
+Developers can now inspect changed files, hunks, added/removed/context lines, and Python Tree-sitter symbol context locally before running the webhook flow.
+
+**How to run / test:**
+```powershell
+./.venv/Scripts/python.exe debug_local_diff.py
+```
+
+## [2026-06-10] — Add Python Tree-sitter diff context
+
+**What changed:**
+- Replaced `utils/diff.py::clean_diff` internals with structured diff parsing models for changed files, hunks, and line-level additions/removals.
+- Added `services/tree_sitter.py` to extract Python function/class context for added lines using Tree-sitter.
+- Added `services/github.py::fetch_file_content` to fetch changed Python file contents from the PR head SHA for AST parsing.
+- Updated `routes/webhook.py::run_review` to combine structured diff text with Python AST context before calling the LLM.
+- Added `requirements.txt` with runtime dependencies including `tree-sitter-language-pack`.
+- Updated `.gitignore` to ignore local virtualenv and Python bytecode artifacts.
+
+**Functionality impact:**
+Python PR reviews now include AST-aware context showing which function or class contains each added line. Non-Python files and deleted files continue through the normal structured diff review path without AST enrichment.
+
+**How to run / test:**
+```powershell
+./.venv/Scripts/python.exe -m pip install -r requirements.txt
+./.venv/Scripts/python.exe -m py_compile main.py routes/webhook.py services/github.py services/llm.py services/tree_sitter.py models/events.py utils/diff.py
+./.venv/Scripts/python.exe -c "from utils.diff import parse_diff; from services.tree_sitter import extract_python_context, format_ast_context_for_prompt; raw='diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n@@ -1,2 +1,3 @@\n def hello():\n+    print(1)\n     return True\n'; files=parse_diff(raw); symbols=extract_python_context(files[0], 'def hello():\n    print(1)\n    return True\n'); print(format_ast_context_for_prompt(symbols))"
+```
+
 ## [2026-06-07] — Fix webhook timeout by moving review to background task
 
 **What changed:**

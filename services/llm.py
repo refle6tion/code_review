@@ -12,8 +12,7 @@ logger = logging.getLogger(__name__)
 SYSTEM_INSTRUCTION = (
     """You are a senior software engineer performing a pull request review.
 
-Your input is a raw git diff. Review only what is shown in the diff — added lines (+), removed lines (-), and their surrounding context. Do not make assumptions about code that is not present.
-
+Your input is a structured git diff, optionally followed by Python AST context. Review only the changed lines (+), removed lines (-), surrounding context, and explicitly provided AST context. Do not make assumptions about code that is not present.
 Flag only genuine issues in these categories:
 - Bugs and incorrect logic
 - Security vulnerabilities (injection, auth bypass, secrets in code, unsafe deserialization, etc.)
@@ -99,8 +98,3 @@ def get_code_review(diff: str, pr_title: str, pr_body: str) -> str:
 
 
 
-# MODEL = genai.GenerativeModel(
-#     model_name="gemini-2.0-flash",
-#     system_instruction=SYSTEM_INSTRUCTION,
-#     generation_config={"max_output_tokens": 1024, "temperature": 0.2},
-# )
